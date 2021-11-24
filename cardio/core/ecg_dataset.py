@@ -1,6 +1,6 @@
 """Contains ECG Dataset class."""
 
-import batchflow as ds
+import batchflow.dataset as ds
 from .ecg_batch import EcgBatch
 
 
