@@ -3,7 +3,7 @@
 import numpy as np
 import dill
 
-from batchflow.models import BaseModel
+from batchflow.models.base import BaseModel
 
 
 def prepare_hmm_input(batch, model, features, channel_ix):
