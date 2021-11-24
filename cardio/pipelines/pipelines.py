@@ -6,8 +6,8 @@ import numpy as np
 import tensorflow as tf
 from hmmlearn import hmm
 
-from .. import dataset as ds
-from ..dataset.dataset import F, V
+import batchflow as ds
+from batchflow import F, V
 from ..models.hmm import HMModel, prepare_hmm_input
 
 
