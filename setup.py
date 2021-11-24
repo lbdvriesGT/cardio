@@ -29,7 +29,7 @@ setup(
     install_requires=[
         'numpy==1.13.1',
         'scipy==0.19.1',
-        'pandas==0.21.1',
+        'pandas>=0.21.1',
         'scikit-learn==0.19.1',
         'numba==0.35.0',
         'pywavelets==0.5.2',
