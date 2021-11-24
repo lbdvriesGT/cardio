@@ -11,7 +11,7 @@ import scipy.signal
 import matplotlib.pyplot as plt
 import pywt
 
-from .. import dataset as ds
+import batchflow as ds
 from . import kernels
 from . import ecg_batch_tools as bt
 from .utils import partialmethod, LabelBinarizer
