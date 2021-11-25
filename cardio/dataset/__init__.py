@@ -1,4 +1,4 @@
-import os
+import sys
+import importlib
 
-from batchflow import *
-__path__ = [os.path.join(os.path.dirname(__file__), 'batchflow')]
+sys.modules[__package__] = importlib.import_module('.dataset', __package__)
