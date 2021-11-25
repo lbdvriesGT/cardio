@@ -1,6 +1,6 @@
 """Contains ECG Dataset class."""
 
-import batchflow.dataset as ds
+import batchflow as ds
 from .ecg_batch import EcgBatch
 
 
@@ -30,7 +30,7 @@ class EcgDataset(ds.Dataset):
         Additional named argments to ``index_class.__init__``.
     """
 
-    def __init__(self, index=None, batch_class=EcgBatch, preloaded=None, index_class=ds.FilesIndex, *args, **kwargs):
+    def __init__(self, index=None, batch_class=EcgBatch, preloaded=None, index_class=ds.batch.FilesIndex, *args, **kwargs):
         if index is None:
             index = index_class(*args, **kwargs)
         super().__init__(index, batch_class, preloaded)
