@@ -6,7 +6,7 @@ import numpy as np
 import tensorflow as tf
 from hmmlearn import hmm
 
-import batchflow as ds
+import cardio.dataset as ds
 from batchflow import F, V
 from ..models.hmm import HMModel, prepare_hmm_input
 
