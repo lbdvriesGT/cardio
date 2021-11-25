@@ -11,7 +11,7 @@ import scipy.signal
 import matplotlib.pyplot as plt
 import pywt
 
-import batchflow.dataset as ds
+import batchflow as ds
 from . import kernels
 from . import ecg_batch_tools as bt
 from .utils import partialmethod, LabelBinarizer
@@ -289,7 +289,7 @@ class EcgBatch(ds.Batch):
 
         if src is not None:
             path = src[index]
-        elif isinstance(self.index, ds.FilesIndex):
+        elif isinstance(self.index, ds.batch.FilesIndex):
             path = self.index.get_fullpath(index)  # pylint: disable=no-member
         else:
             raise ValueError("Source path is not specified")
@@ -351,7 +351,7 @@ class EcgBatch(ds.Batch):
         if self.unique_labels is None:
             if self.pipeline is None:
                 raise RuntimeError("Batch with undefined unique_labels must be created in a pipeline")
-            ds_indices = self.pipeline.dataset.indices
+            ds_indices = self.dataset.Pipeline.indices
             self.unique_labels = np.sort(src[ds_indices].unique())
         return self
 
