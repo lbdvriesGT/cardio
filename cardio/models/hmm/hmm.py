@@ -3,8 +3,7 @@
 import numpy as np
 import dill
 
-from batchflow.models.base import BaseModel
-
+from ...dataset.dataset.models.base import BaseModel
 
 def prepare_hmm_input(batch, model, features, channel_ix):
     """Concatenate selected channel ``channel_ix`` of the batch attribute
