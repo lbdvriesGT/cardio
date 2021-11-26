@@ -3,7 +3,7 @@ import copy as cp
 import numpy as np
 
 from .base import Baseset
-from cardio.core import EcgBatch as Batch
+from .dataset import Batch
 from .dsindex import DatasetIndex
 from .named_expr import F
 from .pipeline import Pipeline
