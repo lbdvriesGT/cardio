@@ -15,13 +15,6 @@ from .. import dataset as ds
 from . import kernels
 from . import ecg_batch_tools as bt
 from .utils import partialmethod, LabelBinarizer
-# renaming apply_parallel decorator is needed as Batch.apply_parallel method is also in the same namespace
-# and can serve as a decorator too
-from .decorators import action, inbatch_parallel, any_action_failed, apply_parallel as apply_parallel_
-from .components import create_item_class, BaseComponents
-from .named_expr import P, R
-from .utils_random import make_rng
-
 
 
 ACTIONS_DICT = {
@@ -44,10 +37,8 @@ ACTIONS_DICT = {
 TEMPLATE_DOCSTRING = """
     Compute {description} for each slice of a signal over the axis 0
     (typically the channel axis).
-
     This method simply wraps ``apply_to_each_channel`` method by setting the
     ``func`` argument to ``{full_name}``.
-
     Parameters
     ----------
     src : str, optional
@@ -58,7 +49,6 @@ TEMPLATE_DOCSTRING = """
         Any additional positional arguments to ``{full_name}``.
     kwargs : misc
         Any additional named arguments to ``{full_name}``.
-
     Returns
     -------
     batch : EcgBatch
@@ -70,7 +60,6 @@ TEMPLATE_DOCSTRING = dedent(TEMPLATE_DOCSTRING).strip()
 def add_actions(actions_dict, template_docstring):
     """Add new actions in ``EcgBatch`` by setting ``func`` argument in
     ``EcgBatch.apply_to_each_channel`` method to given callables.
-
     Parameters
     ----------
     actions_dict : dict
@@ -80,7 +69,6 @@ def add_actions(actions_dict, template_docstring):
         A string, that will be formatted for each new method from
         ``actions_dict`` using ``full_name`` and ``description`` parameters
         and assigned to its ``__doc__`` attribute.
-
     Returns
     -------
     decorator : callable
@@ -100,10 +88,8 @@ def add_actions(actions_dict, template_docstring):
 @add_actions(ACTIONS_DICT, TEMPLATE_DOCSTRING)  # pylint: disable=too-many-public-methods,too-many-instance-attributes
 class EcgBatch(ds.Batch):
     """Batch class for ECG signals storing.
-
     Contains ECG signals and additional metadata along with various processing
     methods.
-
     Parameters
     ----------
     index : DatasetIndex
@@ -112,7 +98,6 @@ class EcgBatch(ds.Batch):
         Data to put in the batch if given. Defaults to ``None``.
     unique_labels : 1-D ndarray, optional
         Array with unique labels in a dataset.
-
     Attributes
     ----------
     index : DatasetIndex
@@ -129,7 +114,6 @@ class EcgBatch(ds.Batch):
         Array with unique labels in a dataset.
     label_binarizer : LabelBinarizer
         Object for label one-hot encoding.
-
     Note
     ----
     Some batch methods take ``index`` as their first argument after ``self``.
@@ -139,8 +123,8 @@ class EcgBatch(ds.Batch):
     ``batch.resample_signals(fs)``.
     """
 
-    def __init__(self, index, dataset=None, preloaded=self.data, copy=self._copy, unique_labels=None,  **kwargs):
-        super().__init__(index, preloaded)
+    def __init__(self, index, dataset=None, pipeline=None, preloaded=None, copy=False, unique_labels=None, *args, **kwargs):
+        super().__init__(index, dataset, pipeline, preloaded, copy)
         self.signal = self.array_of_nones
         self.annotation = self.array_of_dicts
         self.meta = self.array_of_dicts
@@ -148,403 +132,31 @@ class EcgBatch(ds.Batch):
         self._unique_labels = None
         self._label_binarizer = None
         self.unique_labels = unique_labels
-        self.index = index
-        self._preloaded_lock = threading.Lock()
-        self._preloaded = preloaded
-        self._copy = copy
-        self._local = threading.local()
-        self._data_named = None
-        self._data = None
-        self._dataset = dataset
-        self.pipeline = pipeline
-        self.iteration = None
-        self._attrs = None
-        self.create_attrs(**kwargs)
 
-    def create_attrs(self, **kwargs):
-        """ Create attributes from kwargs """
-        self._attrs = list(kwargs.keys())
-        for attr, value in kwargs.items():
-            setattr(self, attr, value)
-
-    def get_attrs(self):
-        """ Return additional attrs as kwargs """
-        if self._attrs is None:
-            return {}
-        return {attr: getattr(self, attr, None) for attr in self._attrs}
-
-    @ds.property
-    def data(self):
-        """: tuple or named components - batch data """
-        try:
-            if self._data is None and self._preloaded is not None:
-                # load data the first time it's requested
-                with self._preloaded_lock:
-                    if self._data is None and self._preloaded is not None:
-                        self.load(src=self._preloaded)
-            res = self._data if self.components is None else self._data_named
-        except Exception as exc:
-            print("Exception:", exc)
-            traceback.print_tb(exc.__traceback__)
-            raise
-        return res
-
-    @data.setter
-    def data_setter(self, value):
-        """: tuple or named components - batch data """
-        self._data = value
-
-    @ds.property
-    def dataset(self):
-        """: Dataset - a dataset the batch has been taken from """
-        if self.pipeline is not None:
-            return self.pipeline.dataset
-        return self._dataset
-
-    @ds.property
-    def pipeline(self):
-        """: Pipeline - a pipeline the batch is being used in """
-        return self._local.pipeline
-
-    @ds.pipeline.setter
-    def pipeline(self, value):
-        """ Store the pipeline in a thread-local storage """
-        self._local.pipeline = value
-
-    @ds.property
-    def random(self):
-        """ A random number generator :class:`numpy.random.Generator`.
-        Use it instead of `np.random` for reproducibility.
-        Examples
-        --------
-        ::
-            x = self.random.normal(0, 1)
-        """
-        # if RNG is set for the batch (e.g. in @inbatch_parallel), use it
-        if hasattr(self._local, 'random'):
-            return self._local.random
-        # otherwise use RNG from the pipeline
-        if self.pipeline is not None and self.pipeline.random is not None:
-            return self.pipeline.random
-
-        # if there is none (e.g. when the batch is created manually), make a random one
-        self._local.random = make_rng(self.random_seed)
-        return self._local.random
-
-    @ds.property
-    def random_seed(self):
-        """ : SeedSequence for random number generation """
-        # if RNG is set for the batch (e.g. in @inbatch_parallel), use it
-        if hasattr(self._local, 'random_seed'):
-            return self._local.random_seed
-
-        if self.pipeline is not None and self.pipeline.random_seed is not None:
-            return self.pipeline.random_seed
-
-        # if there is none (e.g. when the batch is created manually), make a random seed
-        self._local.random_seed = np.random.SeedSequence()
-        return self._local.random_seed
-
-    @ds.random_seed.setter
-    def random_seed(self, value):
-        """ : SeedSequence for random number generation """
-        self._local.random_seed = value
-        self._local.random = make_rng(value)
-
-    def __copy__(self):
-        dump_batch = dill.dumps(self)
-        restored_batch = dill.loads(dump_batch)
-        return restored_batch
-
-    def deepcopy(self):
-        """ Return a deep copy of the batch. """
-        return self.__copy__()
-
-    @ds.classmethod
-    def from_data(cls, index=None, data=None):
-        """ Create a batch from data given """
-        # this is roughly equivalent to self.data = data
-        if index is None:
-            index = np.arange(len(data))
-        return cls(index, preloaded=data)
-
-    @ds.classmethod
-    def merge(cls, batches, batch_size=None, components=None, batch_class=None):
-        """ Merge several batches to form a new batch of a given size
-        Parameters
-        ----------
-        batches : tuple of batches
-        batch_size : int or None
-            if `None`, just merge all batches into one batch (the rest will be `None`),
-            if `int`, then make one batch of `batch_size` and a batch with the rest of data.
-        components : str, tuple or None
-            if `None`, all components from initial batches will be created,
-            if `str` or `tuple`, then create these components in new batches.
-        batch_class : Batch or None
-            if `None`, created batches will be of the same class as initial batch,
-            if `Batch`, created batches will be of that class.
-        Returns
-        -------
-        batch, rest : tuple of two batches
-        Raises
-        ------
-        ValueError
-            If component is `None` in some batches and not `None` in others.
-        """
-        batch_class = batch_class or cls
-        def _make_index(data):
-            return DatasetIndex(data.shape[0]) if data is not None and data.shape[0] > 0 else None
-
-        def _make_batch(data):
-            index = _make_index(data[0])
-            batch = batch_class.from_data(index, tuple(data)) if index is not None else None
-            if batch is not None:
-                batch.components = tuple(components)
-                _ = batch.data
-            return batch
-
-        if batch_size is not None:
-            break_point = len(batches) - 1
-            last_batch_len = 0
-            cur_size = 0
-            for i, b in enumerate(batches):
-                cur_batch_len = len(b)
-                if cur_size + cur_batch_len >= batch_size:
-                    break_point = i
-                    last_batch_len = batch_size - cur_size
-                    break
-
-                cur_size += cur_batch_len
-                last_batch_len = cur_batch_len
-
-        if components is None:
-            components = batches[0].components or (None,)
-        elif isinstance(components, str):
-            components = (components, )
-        new_data = list(None for _ in components)
-        rest_data = list(None for _ in components)
-
-        for i, comp in enumerate(components):
-            none_components_in_batches = [b.get(component=comp) is None for b in batches]
-            if np.all(none_components_in_batches):
-                continue
-            if np.any(none_components_in_batches):
-                raise ValueError('Component {} is None in some batches'.format(comp))
-
-            if batch_size is None:
-                new_comp = [b.get(component=comp) for b in batches]
-            else:
-                last_batch = batches[break_point]
-                new_comp = [b.get(component=comp) for b in batches[:break_point]] + \
-                           [last_batch.get(component=comp)[:last_batch_len]]
-
-            new_data[i] = cls.merge_component(comp, new_comp)
-
-            if batch_size is not None:
-                rest_comp = [last_batch.get(component=comp)[last_batch_len:]] + \
-                            [b.get(component=comp) for b in batches[break_point + 1:]]
-                rest_data[i] = cls.merge_component(comp, rest_comp)
-
-        new_batch = _make_batch(new_data)
-        rest_batch = _make_batch(rest_data)
-
-        return new_batch, rest_batch
-
-    @ds.classmethod
-    def merge_component(cls, component=None, data=None):
-        """ Merge the same component data from several batches """
-        _ = component
-        if isinstance(data[0], np.ndarray):
-            return np.concatenate(data)
-        raise TypeError("Unknown data type", type(data[0]))
-
-    def as_dataset(self, dataset=None, copy=False):
-        """ Makes a new dataset from batch data
-        Parameters
-        ----------
-        dataset
-            an instance or a subclass of Dataset
-        copy : bool
-            whether to copy batch data to allow for further inplace transformations
-        Returns
-        -------
-        an instance of a class specified by `dataset` arg, preloaded with this batch data
-        """
-        dataset = dataset or self._dataset
-        if dataset is None:
-            raise ValueError('dataset can be an instance of Dataset (sub)class or the class itself, but not None')
-        if isinstance(dataset, type):
-            dataset_class = dataset
-            attrs = {}
-        else:
-            dataset_class = dataset.__class__
-            attrs = dataset.get_attrs()
-        return dataset_class(self.index, batch_class=type(self), preloaded=self._data, copy=copy, **attrs)
-
-    @ds.property
-    def indices(self):
-        """: numpy array - an array with the indices """
-        if isinstance(self.index, DatasetIndex):
-            return self.index.indices
-        return self.index
-
-    def __len__(self):
-        return len(self.index)
-
-    @ds.property
-    def size(self):
-        """: int - number of items in the batch """
-        return len(self)
-
-    @ds.action
-    def add_components(self, components, init=None):
-        """ Add new components
-        Parameters
-        ----------
-        components : str or list
-            new component names
-        init : array-like
-            initial component data
-        Raises
-        ------
-        ValueError
-            If a component or an attribute with the given name already exists
-        """
-        if isinstance(components, str):
-            components = (components,)
-            init = (init,)
-        elif isinstance(components, (tuple, list)):
-            components = tuple(components)
-            if init is None:
-                init = (None,) * len(components)
-            else:
-                init = tuple(init)
-
-        for comp, value in zip(components, init):
-            if hasattr(self, comp):
-                raise ValueError("An attribute '%s' already exists" % comp)
-            if self.components is not None and comp in self.components:
-                raise ValueError("A components '%s' already exists" % comp)
-
-            if self.components is None:
-                self.components = tuple([comp])
-                if self._data is not None:
-                    warnings.warn("All batch data is erased")
-            else:
-                self.components = self.components + tuple([comp])
-            setattr(self, comp, value)
-
-        return self
-
-    def __getattr__(self, name):
-        if self.components is not None and name in self.components:   # pylint: disable=unsupported-membership-test
-            return getattr(self.data, name, None)
-        raise AttributeError("%s not found in class %s" % (name, self.__class__.__name__))
-
-    def __setattr__(self, name, value):
-        if self.components is not None:
-            if name == "_data":
-                super().__setattr__(name, value)
-                if self._data is not None:
-                    if isinstance(self._data, BaseComponents):
-                        self._data_named = self._data
-                    else:
-                        self._data_named = create_item_class(self.components, self._data)
-                return
-            if name in self.components:    # pylint: disable=unsupported-membership-test
-                # preload data if needed
-                _ = self.data
-                if self._data_named is None or self._data_named.components != self.components:
-                    self._data_named = create_item_class(self.components, self._data)
-                setattr(self._data_named, name, value)
-                # update _data with with new component values
-                super().__setattr__('_data', self._data_named.data)
-                return
-        super().__setattr__(name, value)
-
-    def __getstate__(self):
-        state = self.__dict__.copy()
-        state['_local'] = state['_local'] is not None
-        state['_preloaded_lock'] = True
-        return state
-
-    def __setstate__(self, state):
-        state['_preloaded_lock'] = threading.Lock() if state['_preloaded_lock'] else None
-        state['_local'] = threading.local() if state['_local'] else None
-
-        for k, v in state.items():
-            # this warrants that all hidden objects are reconstructed upon unpickling
-            setattr(self, k, v)
-
-    @ds.property
-    def array_of_nones(self):
-        """1-D ndarray: ``NumPy`` array with ``None`` values."""
-        return np.array([None] * len(self.index))
-
-    def get(self, item=None, component=None):
-        """ Return an item from the batch or the component """
-        if item is None:
-            if component is None:
-                res = self.data
-            else:
-                res = getattr(self, component)
-        else:
-            if component is None:
-                res = self[item]
-            else:
-                res = getattr(self[item], component)
-        return res
-
-    def __getitem__(self, item):
-        return self.data[item] if self.data is not None else None
-
-    def __iter__(self):
-        for item in self.indices:
-            yield self[item]
-
-    @ds.property
-    def items(self):
-        """: list - batch items """
-        return [[self[ix]] for ix in self.indices]
-
-    def run_once(self, *args, **kwargs):
-        """ Init function for no parallelism
-        Useful for async action-methods (will wait till the method finishes)
-        """
-        _ = self.data, args, kwargs
-        return [[]]
-
-    def get_errors(self, all_res):
-        """ Return a list of errors from a parallel action """
-        all_errors = [error for error in all_res if isinstance(error, Exception)]
-        return all_errors if len(all_errors) > 0 else None
-
-
-    @ds.property
+    @property
     def components(self):
         """tuple of str: Data components names."""
         return "signal", "annotation", "meta", "target"
 
-    @ds.property
+    @property
     def array_of_nones(self):
         """1-D ndarray: ``NumPy`` array with ``None`` values."""
         return np.array([None] * len(self.index))
 
-    @ds.property
+    @property
     def array_of_dicts(self):
         """1-D ndarray: ``NumPy`` array with empty ``dict`` values."""
         return np.array([{} for _ in range(len(self.index))])
 
-    @ds.property
+    @property
     def unique_labels(self):
         """1-D ndarray: Unique labels in a dataset."""
         return self._unique_labels
 
-    @ds.unique_labels.setter
+    @unique_labels.setter
     def unique_labels(self, val):
         """Set unique labels value to ``val``. Updates
         ``self.label_binarizer`` instance.
-
         Parameters
         ----------
         val : 1-D ndarray
@@ -556,7 +168,7 @@ class EcgBatch(ds.Batch):
         else:
             self._label_binarizer = LabelBinarizer().fit(self.unique_labels)
 
-    @ds.property
+    @property
     def label_binarizer(self):
         """LabelBinarizer: Label binarizer object for unique labels in a
         dataset."""
@@ -564,12 +176,10 @@ class EcgBatch(ds.Batch):
 
     def _reraise_exceptions(self, results):
         """Reraise all exceptions in the ``results`` list.
-
         Parameters
         ----------
         results : list
             Post function computation results.
-
         Raises
         ------
         RuntimeError
@@ -579,15 +189,13 @@ class EcgBatch(ds.Batch):
             all_errors = self.get_errors(results)
             raise RuntimeError("Cannot assemble the batch", all_errors)
 
-    @ds.staticmethod
+    @staticmethod
     def _check_2d(signal):
         """Check if given signal is 2-D.
-
         Parameters
         ----------
         signal : ndarray
             Signal to check.
-
         Raises
         ------
         ValueError
@@ -601,14 +209,11 @@ class EcgBatch(ds.Batch):
     @ds.action
     def load(self, src=None, fmt=None, components=None, ann_ext=None, *args, **kwargs):
         """Load given batch components from source.
-
         Most of the ``EcgBatch`` actions work under the assumption that both
         ``signal`` and ``meta`` components are loaded. In case this assumption
         is not fulfilled, normal operation of the actions is not guaranteed.
-
         This method supports loading of signals from wfdb, DICOM, EDF, wav and
         blosc formats.
-
         Parameters
         ----------
         src : misc, optional
@@ -619,7 +224,6 @@ class EcgBatch(ds.Batch):
             Components to load.
         ann_ext : str, optional
             Extension of the annotation file.
-
         Returns
         -------
         batch : EcgBatch
@@ -638,7 +242,6 @@ class EcgBatch(ds.Batch):
     @ds.inbatch_parallel(init="indices", post="_assemble_load", target="threads")
     def _load_data(self, index, src=None, fmt=None, components=None, *args, **kwargs):
         """Load given components from wfdb, DICOM, EDF or wav files.
-
         Parameters
         ----------
         src : misc, optional
@@ -650,12 +253,10 @@ class EcgBatch(ds.Batch):
             Components to load.
         ann_ext: str, optional
             Extension of the annotation file.
-
         Returns
         -------
         batch : EcgBatch
             Batch with loaded components. Changes batch data inplace.
-
         Raises
         ------
         ValueError
@@ -675,12 +276,10 @@ class EcgBatch(ds.Batch):
 
     def _assemble_load(self, results, *args, **kwargs):
         """Concatenate results of different workers and update ``self``.
-
         Parameters
         ----------
         results : list
             Workers' results.
-
         Returns
         -------
         batch : EcgBatch
@@ -701,18 +300,15 @@ class EcgBatch(ds.Batch):
 
     def _load_labels(self, src):
         """Load labels from a csv file or ``pandas.Series``.
-
         Parameters
         ----------
         src : str or Series
             Path to csv file or ``pandas.Series``. The file should contain two
             columns: ECG index and label. It shouldn't have a header.
-
         Returns
         -------
         batch : EcgBatch
             Batch with loaded labels. Changes ``self.target`` inplace.
-
         Raises
         ------
         TypeError
@@ -735,10 +331,8 @@ class EcgBatch(ds.Batch):
 
     def show_ecg(self, index=None, start=0, end=None, annot=None, subplot_size=(10, 4)):  # pylint: disable=too-many-locals, line-too-long
         """Plot an ECG signal.
-
         Optionally highlight QRS complexes along with P and T waves. Each
         channel is displayed on a separate subplot.
-
         Parameters
         ----------
         index : element of ``self.indices``, optional
@@ -753,7 +347,6 @@ class EcgBatch(ds.Batch):
             obtained from ``cardio.models.HMModel``.
         subplot_size : tuple
             Width and height of each subplot in inches.
-
         Raises
         ------
         ValueError
@@ -801,7 +394,6 @@ class EcgBatch(ds.Batch):
         """Concatenate a list of ``EcgBatch`` instances and split the result
         into two batches of sizes ``batch_size`` and ``sum(lens of batches) -
         batch_size`` respectively.
-
         Parameters
         ----------
         batches : list
@@ -809,7 +401,6 @@ class EcgBatch(ds.Batch):
         batch_size : positive int, optional
             Length of the first resulting batch. If ``None``, equals the
             length of the concatenated batch.
-
         Returns
         -------
         new_batch : EcgBatch
@@ -819,7 +410,6 @@ class EcgBatch(ds.Batch):
         rest_batch : EcgBatch
             Batch of the remaining items. Contains a deep copy of input
             batches' data.
-
         Raises
         ------
         ValueError
@@ -856,7 +446,6 @@ class EcgBatch(ds.Batch):
     @ds.action
     def apply_transform(self, func, *args, src="signal", dst="signal", **kwargs):
         """Apply a function to each item in the batch.
-
         Parameters
         ----------
         func : callable
@@ -874,7 +463,6 @@ class EcgBatch(ds.Batch):
             Any additional positional arguments to ``func``.
         kwargs : misc
             Any additional named arguments to ``func``.
-
         Returns
         -------
         batch : EcgBatch
@@ -901,7 +489,6 @@ class EcgBatch(ds.Batch):
     def apply_to_each_channel(self, index, func, *args, src="signal", dst="signal", **kwargs):
         """Apply a function to each slice of a signal over the axis 0
         (typically the channel axis).
-
         Parameters
         ----------
         func : callable
@@ -916,7 +503,6 @@ class EcgBatch(ds.Batch):
             Any additional positional arguments to ``func``.
         kwargs : misc
             Any additional named arguments to ``func``.
-
         Returns
         -------
         batch : EcgBatch
@@ -932,21 +518,17 @@ class EcgBatch(ds.Batch):
     def _filter_batch(self, keep_mask):
         """Drop elements from a batch with corresponding ``False`` values in
         ``keep_mask``.
-
         This method creates a new batch and updates only components and
         ``unique_labels`` attribute. The information stored in other
         attributes will be lost.
-
         Parameters
         ----------
         keep_mask : bool 1-D ndarray
             Filtering mask.
-
         Returns
         -------
         batch : same class as self
             Filtered batch.
-
         Raises
         ------
         SkipBatchException
@@ -965,21 +547,17 @@ class EcgBatch(ds.Batch):
     @ds.action
     def drop_labels(self, drop_list):
         """Drop elements whose labels are in ``drop_list``.
-
         This method creates a new batch and updates only components and
         ``unique_labels`` attribute. The information stored in other
         attributes will be lost.
-
         Parameters
         ----------
         drop_list : list
             Labels to be dropped from a batch.
-
         Returns
         -------
         batch : EcgBatch
             Filtered batch. Creates a new ``EcgBatch`` instance.
-
         Raises
         ------
         SkipBatchException
@@ -995,21 +573,17 @@ class EcgBatch(ds.Batch):
     @ds.action
     def keep_labels(self, keep_list):
         """Drop elements whose labels are not in ``keep_list``.
-
         This method creates a new batch and updates only components and
         ``unique_labels`` attribute. The information stored in other
         attributes will be lost.
-
         Parameters
         ----------
         keep_list : list
             Labels to be kept in a batch.
-
         Returns
         -------
         batch : EcgBatch
             Filtered batch. Creates a new ``EcgBatch`` instance.
-
         Raises
         ------
         SkipBatchException
@@ -1025,12 +599,10 @@ class EcgBatch(ds.Batch):
     @ds.action
     def rename_labels(self, rename_dict):
         """Rename labels with corresponding values from ``rename_dict``.
-
         Parameters
         ----------
         rename_dict : dict
             Dictionary containing ``(old label : new label)`` pairs.
-
         Returns
         -------
         batch : EcgBatch
@@ -1043,7 +615,6 @@ class EcgBatch(ds.Batch):
     @ds.action
     def binarize_labels(self):
         """Binarize labels in a batch in a one-vs-all fashion.
-
         Returns
         -------
         batch : EcgBatch
@@ -1058,12 +629,10 @@ class EcgBatch(ds.Batch):
     def _filter_channels(self, index, names=None, indices=None, invert_mask=False):
         """Build and apply a boolean mask for each channel of a signal based
         on provided channels ``names`` and ``indices``.
-
         Mask value for a channel is set to ``True`` if its name or index is
         contained in ``names`` or ``indices`` respectively. The mask can be
         inverted before its application if ``invert_mask`` flag is set to
         ``True``.
-
         Parameters
         ----------
         names : str or list or tuple, optional
@@ -1072,13 +641,11 @@ class EcgBatch(ds.Batch):
             Channels indices used to construct the mask.
         invert_mask : bool, optional
             Specifies whether to invert the mask before its application.
-
         Returns
         -------
         batch : EcgBatch
             Batch with filtered channels. Changes ``self.signal`` and
             ``self.meta`` inplace.
-
         Raises
         ------
         ValueError
@@ -1108,20 +675,17 @@ class EcgBatch(ds.Batch):
     def drop_channels(self, names=None, indices=None):
         """Drop channels whose names are in ``names`` or whose indices are in
         ``indices``.
-
         Parameters
         ----------
         names : str or list or tuple, optional
             Names of channels to be dropped from a batch.
         indices : int or list or tuple, optional
             Indices of channels to be dropped from a batch.
-
         Returns
         -------
         batch : EcgBatch
             Batch with dropped channels. Changes ``self.signal`` and
             ``self.meta`` inplace.
-
         Raises
         ------
         ValueError
@@ -1135,20 +699,17 @@ class EcgBatch(ds.Batch):
     def keep_channels(self, names=None, indices=None):
         """Drop channels whose names are not in ``names`` and whose indices
         are not in ``indices``.
-
         Parameters
         ----------
         names : str or list or tuple, optional
             Names of channels to be kept in a batch.
         indices : int or list or tuple, optional
             Indices of channels to be kept in a batch.
-
         Returns
         -------
         batch : EcgBatch
             Batch with dropped channels. Changes ``self.signal`` and
             ``self.meta`` inplace.
-
         Raises
         ------
         ValueError
@@ -1162,13 +723,11 @@ class EcgBatch(ds.Batch):
     @ds.inbatch_parallel(init="indices", target="threads")
     def rename_channels(self, index, rename_dict):
         """Rename channels with corresponding values from ``rename_dict``.
-
         Parameters
         ----------
         rename_dict : dict
             Dictionary containing ``(old channel name : new channel name)``
             pairs.
-
         Returns
         -------
         batch : EcgBatch
@@ -1184,7 +743,6 @@ class EcgBatch(ds.Batch):
     @ds.action
     def convolve_signals(self, kernel, padding_mode="edge", axis=-1, **kwargs):
         """Convolve signals with given ``kernel``.
-
         Parameters
         ----------
         kernel : 1-D array_like
@@ -1195,12 +753,10 @@ class EcgBatch(ds.Batch):
             Axis along which signals are sliced. Default value is -1.
         kwargs : misc
             Any additional named arguments to ``np.pad``.
-
         Returns
         -------
         batch : EcgBatch
             Convolved batch. Changes ``self.signal`` inplace.
-
         Raises
         ------
         ValueError
@@ -1214,7 +770,6 @@ class EcgBatch(ds.Batch):
     @ds.inbatch_parallel(init="indices", target="threads")
     def band_pass_signals(self, index, low=None, high=None, axis=-1):
         """Reject frequencies outside a given range.
-
         Parameters
         ----------
         low : positive float, optional
@@ -1223,7 +778,6 @@ class EcgBatch(ds.Batch):
             Low-pass filter cutoff frequency (in Hz).
         axis : int, optional
             Axis along which signals are sliced. Default value is -1.
-
         Returns
         -------
         batch : EcgBatch
@@ -1235,14 +789,12 @@ class EcgBatch(ds.Batch):
     @ds.action
     def drop_short_signals(self, min_length, axis=-1):
         """Drop short signals from a batch.
-
         Parameters
         ----------
         min_length : positive int
             Minimal signal length.
         axis : int, optional
             Axis along which length is calculated. Default value is -1.
-
         Returns
         -------
         batch : EcgBatch
@@ -1255,14 +807,12 @@ class EcgBatch(ds.Batch):
     @ds.inbatch_parallel(init="indices", target="threads")
     def flip_signals(self, index, window_size=None, threshold=0):
         """Flip 2-D signals whose R-peaks are directed downwards.
-
         Each element of ``self.signal`` must be a 2-D ndarray. Signals are
         flipped along axis 1 (signal axis). For each subarray of
         ``window_size`` length skewness is calculated and compared with
         ``threshold`` to decide whether this subarray should be flipped or
         not. Then the mode of the result is calculated to make the final
         decision.
-
         Parameters
         ----------
         window_size : int, optional
@@ -1273,12 +823,10 @@ class EcgBatch(ds.Batch):
         threshold : float, optional
             If skewness of a subarray is less than the ``threshold``, it
             "votes" for flipping the signal. Default value is 0.
-
         Returns
         -------
         batch : EcgBatch
             Batch with flipped signals. Changes ``self.signal`` inplace.
-
         Raises
         ------
         ValueError
@@ -1305,12 +853,10 @@ class EcgBatch(ds.Batch):
     def slice_signals(self, index, selection_object):
         """Perform indexing or slicing of signals in a batch. Allows basic
         ``NumPy`` indexing and slicing along with advanced indexing.
-
         Parameters
         ----------
         selection_object : slice or int or a tuple of slices and ints
             An object that is used to slice signals.
-
         Returns
         -------
         batch : EcgBatch
@@ -1323,7 +869,6 @@ class EcgBatch(ds.Batch):
     def _pad_signal(signal, length, pad_value):
         """Pad signal with ``pad_value`` to the left along axis 1 (signal
         axis).
-
         Parameters
         ----------
         signal : 2-D ndarray
@@ -1332,7 +877,6 @@ class EcgBatch(ds.Batch):
             Length of padded signal along axis 1.
         pad_value : float
             Padding value.
-
         Returns
         -------
         signal : 2-D ndarray
@@ -1345,7 +889,6 @@ class EcgBatch(ds.Batch):
     @staticmethod
     def _get_segmentation_arg(arg, arg_name, target):
         """Get segmentation step or number of segments for a given signal.
-
         Parameters
         ----------
         arg : int or dict
@@ -1354,12 +897,10 @@ class EcgBatch(ds.Batch):
             Argument name.
         target : hashable
             Signal target.
-
         Returns
         -------
         arg : positive int
             Segmentation step or number of segments for given signal.
-
         Raises
         ------
         KeyError
@@ -1381,7 +922,6 @@ class EcgBatch(ds.Batch):
     @staticmethod
     def _check_segmentation_args(signal, target, length, arg, arg_name):
         """Check values of segmentation parameters.
-
         Parameters
         ----------
         signal : 2-D ndarray
@@ -1394,12 +934,10 @@ class EcgBatch(ds.Batch):
             Segmentation step or number of segments.
         arg_name : str
             Argument name.
-
         Returns
         -------
         arg : positive int
             Segmentation step or number of segments for given signal.
-
         Raises
         ------
         ValueError
@@ -1424,15 +962,12 @@ class EcgBatch(ds.Batch):
     def split_signals(self, index, length, step, pad_value=0):
         """Split 2-D signals along axis 1 (signal axis) with given ``length``
         and ``step``.
-
         If signal length along axis 1 is less than ``length``, it is padded to
         the left with ``pad_value``.
-
         Notice, that each resulting signal will be a 3-D ndarray of shape
         ``[n_segments, n_channels, length]``. If you would like to get a
         number of 2-D signals of shape ``[n_channels, length]`` as a result,
         you need to apply ``unstack_signals`` method then.
-
         Parameters
         ----------
         length : positive int
@@ -1442,12 +977,10 @@ class EcgBatch(ds.Batch):
             fetched by signal's target key.
         pad_value : float, optional
             Padding value. Defaults to 0.
-
         Returns
         -------
         batch : EcgBatch
             Batch of split signals. Changes ``self.signal`` inplace.
-
         Raises
         ------
         ValueError
@@ -1472,15 +1005,12 @@ class EcgBatch(ds.Batch):
     def random_split_signals(self, index, length, n_segments, pad_value=0):
         """Split 2-D signals along axis 1 (signal axis) ``n_segments`` times
         with random start position and given ``length``.
-
         If signal length along axis 1 is less than ``length``, it is padded to
         the left with ``pad_value``.
-
         Notice, that each resulting signal will be a 3-D ndarray of shape
         ``[n_segments, n_channels, length]``. If you would like to get a
         number of 2-D signals of shape ``[n_channels, length]`` as a result,
         you need to apply ``unstack_signals`` method then.
-
         Parameters
         ----------
         length : positive int
@@ -1490,12 +1020,10 @@ class EcgBatch(ds.Batch):
             is fetched by signal's target key.
         pad_value : float, optional
             Padding value. Defaults to 0.
-
         Returns
         -------
         batch : EcgBatch
             Batch of split signals. Changes ``self.signal`` inplace.
-
         Raises
         ------
         ValueError
@@ -1520,17 +1048,14 @@ class EcgBatch(ds.Batch):
     def unstack_signals(self):
         """Create a new batch in which each signal's element along axis 0 is
         considered as a separate signal.
-
         This method creates a new batch and updates only components and
         ``unique_labels`` attribute. Signal's data from non-``signal``
         components is duplicated using a deep copy for each of the resulting
         signals. The information stored in other attributes will be lost.
-
         Returns
         -------
         batch : same class as self
             Batch with split signals and duplicated other components.
-
         Examples
         --------
         >>> batch.signal
@@ -1538,7 +1063,6 @@ class EcgBatch(ds.Batch):
                       [ 4,  5,  6,  7],
                       [ 8,  9, 10, 11]])],
               dtype=object)
-
         >>> batch = batch.unstack_signals()
         >>> batch.signal
         array([array([0, 1, 2, 3]),
@@ -1568,14 +1092,11 @@ class EcgBatch(ds.Batch):
     def _safe_fs_resample(self, index, fs):
         """Resample 2-D signal along axis 1 (signal axis) to given sampling
         rate.
-
         New sampling rate is guaranteed to be positive float.
-
         Parameters
         ----------
         fs : positive float
             New sampling rate.
-
         Raises
         ------
         ValueError
@@ -1592,18 +1113,15 @@ class EcgBatch(ds.Batch):
     def resample_signals(self, index, fs):
         """Resample 2-D signals along axis 1 (signal axis) to given sampling
         rate.
-
         Parameters
         ----------
         fs : positive float
             New sampling rate.
-
         Returns
         -------
         batch : EcgBatch
             Resampled batch. Changes ``self.signal`` and ``self.meta``
             inplace.
-
         Raises
         ------
         ValueError
@@ -1620,22 +1138,18 @@ class EcgBatch(ds.Batch):
     def random_resample_signals(self, index, distr, **kwargs):
         """Resample 2-D signals along axis 1 (signal axis) to a new sampling
         rate, sampled from a given distribution.
-
         If new sampling rate is negative, the signal is left unchanged.
-
         Parameters
         ----------
         distr : str or callable
             ``NumPy`` distribution name or a callable to sample from.
         kwargs : misc
             Distribution parameters.
-
         Returns
         -------
         batch : EcgBatch
             Resampled batch. Changes ``self.signal`` and ``self.meta``
             inplace.
-
         Raises
         ------
         ValueError
@@ -1661,12 +1175,10 @@ class EcgBatch(ds.Batch):
     def spectrogram(self, index, *args, src="signal", dst="signal", **kwargs):
         """Compute a spectrogram for each slice of a signal over the axis 0
         (typically the channel axis).
-
         This method is a wrapper around ``scipy.signal.spectrogram``, that
         accepts the same arguments, except the ``fs`` which is substituted
         automatically from signal's meta. The method returns only the
         spectrogram itself.
-
         Parameters
         ----------
         src : str, optional
@@ -1678,7 +1190,6 @@ class EcgBatch(ds.Batch):
             ``scipy.signal.spectrogram``.
         kwargs : misc
             Any additional named arguments to ``scipy.signal.spectrogram``.
-
         Returns
         -------
         batch : EcgBatch
@@ -1695,7 +1206,6 @@ class EcgBatch(ds.Batch):
     def standardize(self, index, axis=None, eps=1e-10, *, src="signal", dst="signal"):
         """Standardize data along specified axes by removing the mean and
         scaling to unit variance.
-
         Parameters
         ----------
         axis : ``None`` or int or tuple of ints, optional
@@ -1707,7 +1217,6 @@ class EcgBatch(ds.Batch):
             Batch attribute or component name to get the data from.
         dst : str, optional
             Batch attribute or component name to put the result in.
-
         Returns
         -------
         batch : EcgBatch
@@ -1724,21 +1233,17 @@ class EcgBatch(ds.Batch):
     def calc_ecg_parameters(self, index, src=None):
         """Calculate ECG report parameters and write them to the ``meta``
         component.
-
         Calculates PQ, QT, QRS intervals along with their borders and the
         heart rate value based on the annotation and writes them to the
         ``meta`` component.
-
         Parameters
         ----------
         src : str
             Batch attribute or component name to get the annotation from.
-
         Returns
         -------
         batch : EcgBatch
             Batch with report parameters stored in the ``meta`` component.
-
         Raises
         ------
         ValueError
