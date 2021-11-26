@@ -15,6 +15,13 @@ from .. import dataset as ds
 from . import kernels
 from . import ecg_batch_tools as bt
 from .utils import partialmethod, LabelBinarizer
+# renaming apply_parallel decorator is needed as Batch.apply_parallel method is also in the same namespace
+# and can serve as a decorator too
+from .decorators import action, inbatch_parallel, any_action_failed, apply_parallel as apply_parallel_
+from .components import create_item_class, BaseComponents
+from .named_expr import P, R
+from .utils_random import make_rng
+
 
 
 ACTIONS_DICT = {
@@ -132,7 +139,7 @@ class EcgBatch(ds.Batch):
     ``batch.resample_signals(fs)``.
     """
 
-    def __init__(self, index, preloaded=None, unique_labels=None):
+    def __init__(self, index, dataset=None, preloaded=self.data, copy=self._copy, unique_labels=None,  **kwargs):
         super().__init__(index, preloaded)
         self.signal = self.array_of_nones
         self.annotation = self.array_of_dicts
@@ -141,28 +148,399 @@ class EcgBatch(ds.Batch):
         self._unique_labels = None
         self._label_binarizer = None
         self.unique_labels = unique_labels
+        self.index = index
+        self._preloaded_lock = threading.Lock()
+        self._preloaded = preloaded
+        self._copy = copy
+        self._local = threading.local()
+        self._data_named = None
+        self._data = None
+        self._dataset = dataset
+        self.pipeline = pipeline
+        self.iteration = None
+        self._attrs = None
+        self.create_attrs(**kwargs)
 
-    @property
-    def components(self):
-        """tuple of str: Data components names."""
-        return "signal", "annotation", "meta", "target"
+    def create_attrs(self, **kwargs):
+        """ Create attributes from kwargs """
+        self._attrs = list(kwargs.keys())
+        for attr, value in kwargs.items():
+            setattr(self, attr, value)
 
-    @property
+    def get_attrs(self):
+        """ Return additional attrs as kwargs """
+        if self._attrs is None:
+            return {}
+        return {attr: getattr(self, attr, None) for attr in self._attrs}
+
+    @ds.property
+    def data(self):
+        """: tuple or named components - batch data """
+        try:
+            if self._data is None and self._preloaded is not None:
+                # load data the first time it's requested
+                with self._preloaded_lock:
+                    if self._data is None and self._preloaded is not None:
+                        self.load(src=self._preloaded)
+            res = self._data if self.components is None else self._data_named
+        except Exception as exc:
+            print("Exception:", exc)
+            traceback.print_tb(exc.__traceback__)
+            raise
+        return res
+
+    @data.setter
+    def data_setter(self, value):
+        """: tuple or named components - batch data """
+        self._data = value
+
+    @ds.property
+    def dataset(self):
+        """: Dataset - a dataset the batch has been taken from """
+        if self.pipeline is not None:
+            return self.pipeline.dataset
+        return self._dataset
+
+    @ds.property
+    def pipeline(self):
+        """: Pipeline - a pipeline the batch is being used in """
+        return self._local.pipeline
+
+    @ds.pipeline.setter
+    def pipeline(self, value):
+        """ Store the pipeline in a thread-local storage """
+        self._local.pipeline = value
+
+    @ds.property
+    def random(self):
+        """ A random number generator :class:`numpy.random.Generator`.
+        Use it instead of `np.random` for reproducibility.
+        Examples
+        --------
+        ::
+            x = self.random.normal(0, 1)
+        """
+        # if RNG is set for the batch (e.g. in @inbatch_parallel), use it
+        if hasattr(self._local, 'random'):
+            return self._local.random
+        # otherwise use RNG from the pipeline
+        if self.pipeline is not None and self.pipeline.random is not None:
+            return self.pipeline.random
+
+        # if there is none (e.g. when the batch is created manually), make a random one
+        self._local.random = make_rng(self.random_seed)
+        return self._local.random
+
+    @ds.property
+    def random_seed(self):
+        """ : SeedSequence for random number generation """
+        # if RNG is set for the batch (e.g. in @inbatch_parallel), use it
+        if hasattr(self._local, 'random_seed'):
+            return self._local.random_seed
+
+        if self.pipeline is not None and self.pipeline.random_seed is not None:
+            return self.pipeline.random_seed
+
+        # if there is none (e.g. when the batch is created manually), make a random seed
+        self._local.random_seed = np.random.SeedSequence()
+        return self._local.random_seed
+
+    @ds.random_seed.setter
+    def random_seed(self, value):
+        """ : SeedSequence for random number generation """
+        self._local.random_seed = value
+        self._local.random = make_rng(value)
+
+    def __copy__(self):
+        dump_batch = dill.dumps(self)
+        restored_batch = dill.loads(dump_batch)
+        return restored_batch
+
+    def deepcopy(self):
+        """ Return a deep copy of the batch. """
+        return self.__copy__()
+
+    @ds.classmethod
+    def from_data(cls, index=None, data=None):
+        """ Create a batch from data given """
+        # this is roughly equivalent to self.data = data
+        if index is None:
+            index = np.arange(len(data))
+        return cls(index, preloaded=data)
+
+    @ds.classmethod
+    def merge(cls, batches, batch_size=None, components=None, batch_class=None):
+        """ Merge several batches to form a new batch of a given size
+        Parameters
+        ----------
+        batches : tuple of batches
+        batch_size : int or None
+            if `None`, just merge all batches into one batch (the rest will be `None`),
+            if `int`, then make one batch of `batch_size` and a batch with the rest of data.
+        components : str, tuple or None
+            if `None`, all components from initial batches will be created,
+            if `str` or `tuple`, then create these components in new batches.
+        batch_class : Batch or None
+            if `None`, created batches will be of the same class as initial batch,
+            if `Batch`, created batches will be of that class.
+        Returns
+        -------
+        batch, rest : tuple of two batches
+        Raises
+        ------
+        ValueError
+            If component is `None` in some batches and not `None` in others.
+        """
+        batch_class = batch_class or cls
+        def _make_index(data):
+            return DatasetIndex(data.shape[0]) if data is not None and data.shape[0] > 0 else None
+
+        def _make_batch(data):
+            index = _make_index(data[0])
+            batch = batch_class.from_data(index, tuple(data)) if index is not None else None
+            if batch is not None:
+                batch.components = tuple(components)
+                _ = batch.data
+            return batch
+
+        if batch_size is not None:
+            break_point = len(batches) - 1
+            last_batch_len = 0
+            cur_size = 0
+            for i, b in enumerate(batches):
+                cur_batch_len = len(b)
+                if cur_size + cur_batch_len >= batch_size:
+                    break_point = i
+                    last_batch_len = batch_size - cur_size
+                    break
+
+                cur_size += cur_batch_len
+                last_batch_len = cur_batch_len
+
+        if components is None:
+            components = batches[0].components or (None,)
+        elif isinstance(components, str):
+            components = (components, )
+        new_data = list(None for _ in components)
+        rest_data = list(None for _ in components)
+
+        for i, comp in enumerate(components):
+            none_components_in_batches = [b.get(component=comp) is None for b in batches]
+            if np.all(none_components_in_batches):
+                continue
+            if np.any(none_components_in_batches):
+                raise ValueError('Component {} is None in some batches'.format(comp))
+
+            if batch_size is None:
+                new_comp = [b.get(component=comp) for b in batches]
+            else:
+                last_batch = batches[break_point]
+                new_comp = [b.get(component=comp) for b in batches[:break_point]] + \
+                           [last_batch.get(component=comp)[:last_batch_len]]
+
+            new_data[i] = cls.merge_component(comp, new_comp)
+
+            if batch_size is not None:
+                rest_comp = [last_batch.get(component=comp)[last_batch_len:]] + \
+                            [b.get(component=comp) for b in batches[break_point + 1:]]
+                rest_data[i] = cls.merge_component(comp, rest_comp)
+
+        new_batch = _make_batch(new_data)
+        rest_batch = _make_batch(rest_data)
+
+        return new_batch, rest_batch
+
+    @ds.classmethod
+    def merge_component(cls, component=None, data=None):
+        """ Merge the same component data from several batches """
+        _ = component
+        if isinstance(data[0], np.ndarray):
+            return np.concatenate(data)
+        raise TypeError("Unknown data type", type(data[0]))
+
+    def as_dataset(self, dataset=None, copy=False):
+        """ Makes a new dataset from batch data
+        Parameters
+        ----------
+        dataset
+            an instance or a subclass of Dataset
+        copy : bool
+            whether to copy batch data to allow for further inplace transformations
+        Returns
+        -------
+        an instance of a class specified by `dataset` arg, preloaded with this batch data
+        """
+        dataset = dataset or self._dataset
+        if dataset is None:
+            raise ValueError('dataset can be an instance of Dataset (sub)class or the class itself, but not None')
+        if isinstance(dataset, type):
+            dataset_class = dataset
+            attrs = {}
+        else:
+            dataset_class = dataset.__class__
+            attrs = dataset.get_attrs()
+        return dataset_class(self.index, batch_class=type(self), preloaded=self._data, copy=copy, **attrs)
+
+    @ds.property
+    def indices(self):
+        """: numpy array - an array with the indices """
+        if isinstance(self.index, DatasetIndex):
+            return self.index.indices
+        return self.index
+
+    def __len__(self):
+        return len(self.index)
+
+    @ds.property
+    def size(self):
+        """: int - number of items in the batch """
+        return len(self)
+
+    @ds.action
+    def add_components(self, components, init=None):
+        """ Add new components
+        Parameters
+        ----------
+        components : str or list
+            new component names
+        init : array-like
+            initial component data
+        Raises
+        ------
+        ValueError
+            If a component or an attribute with the given name already exists
+        """
+        if isinstance(components, str):
+            components = (components,)
+            init = (init,)
+        elif isinstance(components, (tuple, list)):
+            components = tuple(components)
+            if init is None:
+                init = (None,) * len(components)
+            else:
+                init = tuple(init)
+
+        for comp, value in zip(components, init):
+            if hasattr(self, comp):
+                raise ValueError("An attribute '%s' already exists" % comp)
+            if self.components is not None and comp in self.components:
+                raise ValueError("A components '%s' already exists" % comp)
+
+            if self.components is None:
+                self.components = tuple([comp])
+                if self._data is not None:
+                    warnings.warn("All batch data is erased")
+            else:
+                self.components = self.components + tuple([comp])
+            setattr(self, comp, value)
+
+        return self
+
+    def __getattr__(self, name):
+        if self.components is not None and name in self.components:   # pylint: disable=unsupported-membership-test
+            return getattr(self.data, name, None)
+        raise AttributeError("%s not found in class %s" % (name, self.__class__.__name__))
+
+    def __setattr__(self, name, value):
+        if self.components is not None:
+            if name == "_data":
+                super().__setattr__(name, value)
+                if self._data is not None:
+                    if isinstance(self._data, BaseComponents):
+                        self._data_named = self._data
+                    else:
+                        self._data_named = create_item_class(self.components, self._data)
+                return
+            if name in self.components:    # pylint: disable=unsupported-membership-test
+                # preload data if needed
+                _ = self.data
+                if self._data_named is None or self._data_named.components != self.components:
+                    self._data_named = create_item_class(self.components, self._data)
+                setattr(self._data_named, name, value)
+                # update _data with with new component values
+                super().__setattr__('_data', self._data_named.data)
+                return
+        super().__setattr__(name, value)
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        state['_local'] = state['_local'] is not None
+        state['_preloaded_lock'] = True
+        return state
+
+    def __setstate__(self, state):
+        state['_preloaded_lock'] = threading.Lock() if state['_preloaded_lock'] else None
+        state['_local'] = threading.local() if state['_local'] else None
+
+        for k, v in state.items():
+            # this warrants that all hidden objects are reconstructed upon unpickling
+            setattr(self, k, v)
+
+    @ds.property
     def array_of_nones(self):
         """1-D ndarray: ``NumPy`` array with ``None`` values."""
         return np.array([None] * len(self.index))
 
-    @property
+    def get(self, item=None, component=None):
+        """ Return an item from the batch or the component """
+        if item is None:
+            if component is None:
+                res = self.data
+            else:
+                res = getattr(self, component)
+        else:
+            if component is None:
+                res = self[item]
+            else:
+                res = getattr(self[item], component)
+        return res
+
+    def __getitem__(self, item):
+        return self.data[item] if self.data is not None else None
+
+    def __iter__(self):
+        for item in self.indices:
+            yield self[item]
+
+    @ds.property
+    def items(self):
+        """: list - batch items """
+        return [[self[ix]] for ix in self.indices]
+
+    def run_once(self, *args, **kwargs):
+        """ Init function for no parallelism
+        Useful for async action-methods (will wait till the method finishes)
+        """
+        _ = self.data, args, kwargs
+        return [[]]
+
+    def get_errors(self, all_res):
+        """ Return a list of errors from a parallel action """
+        all_errors = [error for error in all_res if isinstance(error, Exception)]
+        return all_errors if len(all_errors) > 0 else None
+
+
+    @ds.property
+    def components(self):
+        """tuple of str: Data components names."""
+        return "signal", "annotation", "meta", "target"
+
+    @ds.property
+    def array_of_nones(self):
+        """1-D ndarray: ``NumPy`` array with ``None`` values."""
+        return np.array([None] * len(self.index))
+
+    @ds.property
     def array_of_dicts(self):
         """1-D ndarray: ``NumPy`` array with empty ``dict`` values."""
         return np.array([{} for _ in range(len(self.index))])
 
-    @property
+    @ds.property
     def unique_labels(self):
         """1-D ndarray: Unique labels in a dataset."""
         return self._unique_labels
 
-    @unique_labels.setter
+    @ds.unique_labels.setter
     def unique_labels(self, val):
         """Set unique labels value to ``val``. Updates
         ``self.label_binarizer`` instance.
@@ -178,7 +556,7 @@ class EcgBatch(ds.Batch):
         else:
             self._label_binarizer = LabelBinarizer().fit(self.unique_labels)
 
-    @property
+    @ds.property
     def label_binarizer(self):
         """LabelBinarizer: Label binarizer object for unique labels in a
         dataset."""
@@ -201,7 +579,7 @@ class EcgBatch(ds.Batch):
             all_errors = self.get_errors(results)
             raise RuntimeError("Cannot assemble the batch", all_errors)
 
-    @staticmethod
+    @ds.staticmethod
     def _check_2d(signal):
         """Check if given signal is 2-D.
 
