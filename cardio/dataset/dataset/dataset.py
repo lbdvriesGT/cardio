@@ -2,8 +2,10 @@
 import copy as cp
 import numpy as np
 
+from cardio.dataset.dataset.batch import BaseBatch, Batch
+
+
 from .base import Baseset
-from .batch import Batch
 from .dsindex import DatasetIndex
 from .named_expr import F
 from .pipeline import Pipeline
