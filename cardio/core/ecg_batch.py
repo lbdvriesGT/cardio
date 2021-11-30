@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 import pywt
 
 from .. import dataset as ds
+from cardio.dataset.dataset import Batch
 from . import kernels
 from . import ecg_batch_tools as bt
 from .utils import partialmethod, LabelBinarizer
@@ -86,7 +87,7 @@ def add_actions(actions_dict, template_docstring):
 
 
 @add_actions(ACTIONS_DICT, TEMPLATE_DOCSTRING)  # pylint: disable=too-many-public-methods,too-many-instance-attributes
-class EcgBatch(ds.Batch):
+class EcgBatch(Batch):
     """Batch class for ECG signals storing.
     Contains ECG signals and additional metadata along with various processing
     methods.
