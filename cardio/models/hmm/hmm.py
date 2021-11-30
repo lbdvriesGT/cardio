@@ -32,9 +32,9 @@ def prepare_hmm_input(batch, model, features, channel_ix):
             List of lengths of individual feature arrays along -1 axis.
     """
     _ = model
-    hmm_features = getattr(batch, features)
+    hmm_features = batch.get_variable("hmm_features")
     x = np.concatenate([features[channel_ix].T for features in hmm_features])
-    lengths = [features.shape[-1] for features in hmm_features]
+    lengths = [hmm_features.shape[2] for feature in hmm_features]
     return {"X": x, "lengths": lengths}
 
 
