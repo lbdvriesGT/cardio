@@ -189,7 +189,7 @@ class EcgBatch(Batch):
         if ds.any_action_failed(results):
             all_errors = self.get_errors(results)
             raise RuntimeError("Cannot assemble the batch", all_errors)
-
+    @action
     def get_pos(self, data, component, index):
         """ Return a position in data for a given index
         Parameters
