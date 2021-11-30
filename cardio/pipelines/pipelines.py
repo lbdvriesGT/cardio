@@ -43,16 +43,16 @@ def hmm_preprocessing_pipeline(batch_size=20, features="hmm_features"):
         return [ann["anntype"] for ann in batch.annotation]
 
     return (ds.Pipeline()
-            .init_variable("annsamps", init_on_each_run=list)
-            .init_variable("anntypes", init_on_each_run=list)
-            .init_variable(features, init_on_each_run=list)
-            .load(fmt='wfdb', components=["signal", "annotation", "meta"], ann_ext='pu1')
-            .cwt(src="signal", dst=features, scales=[4, 8, 16], wavelet="mexh")
-            .standardize(axis=-1, src=features, dst=features)
-            .update_variable("annsamps", ds.F(get_annsamples), mode='e')
-            .update_variable("anntypes", ds.F(get_anntypes), mode='e')
-            .update_variable(features, ds.B(features), mode='e')
-            .run(batch_size=batch_size, shuffle=False, drop_last=False, n_epochs=1, lazy=True))
+      .init_variable("annsamps", list)
+      .init_variable("anntypes", list)
+      .init_variable("hmm_features", list)
+      .load(fmt='wfdb', components=["signal", "annotation", "meta"], ann_ext='pu1')
+      .cwt(src="signal", dst="hmm_features", scales=[4,8,16], wavelet="mexh")
+      .standardize(axis=-1, src="hmm_features", dst="hmm_features")
+      .update(V("annsamps"), F(get_annsamples, mode='e')(batch=B()))
+      .update(V("anntypes"), F(get_anntypes, mode='e')(batch=B()))
+      .update(V("hmm_features"), ds.B("hmm_features"))
+      .run(batch_size=20, shuffle=False, drop_last=False, n_epochs=1, lazy=True))
 
 def hmm_train_pipeline(hmm_preprocessed, batch_size=20, features="hmm_features", channel_ix=0,
                        n_iter=25, random_state=42, model_name='HMM'):
@@ -163,7 +163,7 @@ def hmm_train_pipeline(hmm_preprocessed, batch_size=20, features="hmm_features",
     }
 
     return (ds.Pipeline()
-            .init_model("dynamic", HMModel, model_name, config=config_train)
+            .init_model(model_name, HMModel, "dynamic", config=config_train)
             .load(fmt='wfdb', components=["signal", "annotation", "meta"], ann_ext='pu1')
             .cwt(src="signal", dst=features, scales=[4, 8, 16], wavelet="mexh")
             .standardize(axis=-1, src=features, dst=features)
@@ -203,7 +203,7 @@ def hmm_predict_pipeline(model_path, batch_size=20, features="hmm_features",
     }
 
     return (ds.Pipeline()
-            .init_model("static", HMModel, model_name, config=config_predict)
+            .init_model(model_name, HMModel,"static", config=config_predict)
             .load(fmt="wfdb", components=["signal", "meta"])
             .cwt(src="signal", dst=features, scales=[4, 8, 16], wavelet="mexh")
             .standardize(axis=-1, src=features, dst=features)
