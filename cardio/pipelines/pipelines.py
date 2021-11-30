@@ -52,7 +52,7 @@ def hmm_preprocessing_pipeline(batch_size=20, features="hmm_features"):
       .update(V("annsamps"), F(get_annsamples, mode='e')(batch=B()))
       .update(V("anntypes"), F(get_anntypes, mode='e')(batch=B()))
       .update(V("hmm_features"), ds.B("hmm_features"))
-      .run(batch_size=20, shuffle=False, drop_last=False, n_epochs=1, lazy=True))
+      .run(batch_size=20, shuffle=False, drop_last=False, n_epochs=1, lazy=True, bar=True))
 
 def hmm_train_pipeline(hmm_preprocessed, batch_size=20, features="hmm_features", channel_ix=0,
                        n_iter=25, random_state=42, model_name='HMM'):
@@ -168,7 +168,7 @@ def hmm_train_pipeline(hmm_preprocessed, batch_size=20, features="hmm_features",
             .cwt(src="signal", dst=features, scales=[4, 8, 16], wavelet="mexh")
             .standardize(axis=-1, src=features, dst=features)
             .train_model(model_name, make_data=partial(prepare_hmm_input, features=features, channel_ix=channel_ix))
-            .run(batch_size=batch_size, shuffle=False, drop_last=False, n_epochs=1, lazy=True))
+            .run(batch_size=batch_size, shuffle=False, drop_last=False, n_epochs=1, lazy=True, bar=True))
 
 def hmm_predict_pipeline(model_path, batch_size=20, features="hmm_features",
                          channel_ix=0, annot="hmm_annotation", model_name='HMM'):
@@ -210,4 +210,4 @@ def hmm_predict_pipeline(model_path, batch_size=20, features="hmm_features",
             .predict_model(model_name, make_data=partial(prepare_hmm_input, features=features, channel_ix=channel_ix),
                            save_to=ds.B(annot), mode='w')
             .calc_ecg_parameters(src=annot)
-            .run(batch_size=batch_size, shuffle=False, drop_last=False, n_epochs=1, lazy=True))
+            .run(batch_size=batch_size, shuffle=False, drop_last=False, n_epochs=1, lazy=True, bar=True))
