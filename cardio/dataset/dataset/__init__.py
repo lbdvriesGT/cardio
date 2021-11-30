@@ -8,7 +8,7 @@ if sys.version_info < (3, 5):
 from .base import Baseset
 from .batch import Batch
 from .batch_image import ImagesBatch
-from .config import Config, get
+from .config import Config
 from .dataset import Dataset
 from .pipeline import Pipeline
 from .monitor import *
