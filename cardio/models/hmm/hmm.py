@@ -50,7 +50,8 @@ class HMModel(BaseModel):
     def __init__(self, *args, **kwargs):
         self.estimator = None
         super().__init__(*args, **kwargs)
-
+    
+    @action
     def build(self, *args, **kwargs):
         """
         Set up estimator as an attribute and make initial settings.
@@ -72,7 +73,7 @@ class HMModel(BaseModel):
                 self.estimator.transmat_ = init_params["transmat_"]
             if "s" not in self.estimator.init_params:
                 self.estimator.startprob_ = init_params["startprob_"]
-
+    @action
     def save(self, path, *args, **kwargs):  # pylint: disable=arguments-differ
         """Save ``HMModel`` with ``dill``.
 
@@ -87,7 +88,7 @@ class HMModel(BaseModel):
                 dill.dump(self.estimator, file)
         else:
             raise ValueError("HMM estimator does not exist. Check your cofig for 'estimator'.")
-
+    @action
     def load(self, path, *args, **kwargs):  # pylint: disable=arguments-differ
         """Load ``HMModel`` from file with ``dill``.
 
@@ -99,7 +100,7 @@ class HMModel(BaseModel):
         _ = args, kwargs
         with open(path, "rb") as file:
             self.estimator = dill.load(file)
-
+    @action
     def train(self, *args, **kwargs):
         """ Train the model using data provided.
 
@@ -120,7 +121,7 @@ class HMModel(BaseModel):
         _ = args
         self.estimator.fit(**kwargs)
         return list(self.estimator.monitor_.history)
-
+    @action
     def predict(self, *args, **kwargs):
         """ Make prediction with the data provided.
 
