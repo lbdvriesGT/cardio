@@ -6,7 +6,7 @@ import logging
 import queue as q
 import numpy as np
 
-from .batch_base import BaseBatch
+from .batch import Batch
 from .base import Baseset
 from .exceptions import SkipBatchException
 from .named_expr import NamedExpression, V, eval_expr
