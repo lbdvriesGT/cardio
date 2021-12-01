@@ -3,7 +3,7 @@
 import numpy as np
 import dill
 
-from ...cardio.dataset.dataset.models.base import BaseModel #pylint: disable=no-name-in-module, import-error
+from cardio.dataset.dataset.models.base import BaseModel #pylint: disable=no-name-in-module, import-error
 
 
 def prepare_hmm_input(batch, model, features, channel_ix):
