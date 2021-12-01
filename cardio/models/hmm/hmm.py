@@ -134,7 +134,7 @@ class HMModel(BaseModel):
             
     
  
-    def train(self, X, lengths=lengths, *args, **kwargs):
+    def train(self, X, lengths, *args, **kwargs):
         """ Train the model using data provided.
 
         Parameters
@@ -155,7 +155,7 @@ class HMModel(BaseModel):
         self.estimator.fit(X, lengths)
         return list(self.estimator.monitor_.history)
 
-    def predict(self, X, lengths=lengths, *args, **kwargs):
+    def predict(self, X, lengths, *args, **kwargs):
         """ Make prediction with the data provided.
 
         Parameters
