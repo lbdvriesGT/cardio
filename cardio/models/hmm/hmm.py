@@ -6,7 +6,7 @@ import warnings
 
 from ...dataset.dataset.models.base import BaseModel
 
-def prepare_hmm_input(batch, model, features, channel_ix):
+def prepare_hmm_inputX(batch, model, features, channel_ix):
     """Concatenate selected channel ``channel_ix`` of the batch attribute
     ``features``.
 
@@ -36,7 +36,40 @@ def prepare_hmm_input(batch, model, features, channel_ix):
     hmm_features = batch.get_variable("hmm_features")
     x = np.concatenate([features[channel_ix].T for features in hmm_features])
     lengths = [hmm_features.shape[2] for feature in hmm_features]
-    return {"X": x.reshape(-1, 1), "lengths": lengths}
+    return x.reshape(-1, 1)
+
+def prepare_hmm_inputy(batch, model, features, channel_ix):
+    """Concatenate selected channel ``channel_ix`` of the batch attribute
+    ``features``.
+
+    Parameters
+    ----------
+    batch : EcgBatch
+        Batch to concatenate.
+    model : BaseModel
+        A model to get the resulting arguments.
+    features : str
+        Specifies batch attribute that contains features for ``HMModel``.
+    channel_ix : int
+        Index of channel, which data should be used in training and
+        predicting.
+
+    Returns
+    -------
+    kwargs : dict
+        Named argments for model's train or predict method. Has the
+        following structure:
+        "X" : 2-D ndarray
+            Features concatenated along -1 axis and transposed.
+        "lengths" : list
+            List of lengths of individual feature arrays along -1 axis.
+    """
+    _ = model
+    hmm_features = batch.get_variable("hmm_features")
+    x = np.concatenate([features[channel_ix].T for features in hmm_features])
+    lengths = [hmm_features.shape[2] for feature in hmm_features]
+
+    return "lengths": lengths}
 
 
 class HMModel(BaseModel):
@@ -99,37 +132,9 @@ class HMModel(BaseModel):
             self.estimator = dill.load(file)
             
             
-    def _make_prediction_inputs(self, *args, targets=None, feed_dict=None, **kwargs):
-        """ Parse arguments to create valid inputs for the model.
-        Implements the logic of parsing the positional and keyword arguments to the model,
-        possibly wrapped into `feed_dict` dictionary, or even combination of the two.
-        Used under the hood of :meth:`~.TorchModel.predict` method.
-        Examples
-        --------
-        .. code-block:: python
-            model.predict(B('images'), targets=B('labels'))
-            model.predict(images=B('images'), targets=B('labels'))
-            model.predict(B('images'), targets=B('labels'), masks=B('masks'))
-        """
-        # Concatenate `kwargs` and `feed_dict`; if not empty, use keywords in `parse_input`
-        feed_dict = {**(feed_dict or {}), **kwargs}
-        if len(feed_dict) == 1:
-            _, value = feed_dict.popitem()
-            args = (*args, value)
-        if feed_dict:
-            if targets is not None and 'targets' in feed_dict.keys():
-                warnings.warn("`targets` already present in `feed_dict`, so those passed as keyword arg won't be used")
-            *inputs, targets = self.parse_inputs(*args, **feed_dict)
-
-        # Positional arguments only
-        else:
-            inputs = self.parse_inputs(*args)
-            if targets is not None:
-                targets = self.parse_inputs(targets)[0]
-        inputs = inputs[0] if isinstance(inputs, (tuple, list)) and len(inputs) == 1 else inputs
-        return inputs, targets
+    
  
-    def train(self, feed_dict=None, *args, **kwargs):
+    def train(self, X, lengths=lengths, *args, **kwargs):
         """ Train the model using data provided.
 
         Parameters
@@ -146,15 +151,11 @@ class HMModel(BaseModel):
         -----
         For more details and other parameters look at the documentation for the estimator used.
         """
-        
-        X, lengths = self._make_prediction_inputs(*args, targets=targets, feed_dict=feed_dict, **kwargs)
-        print(X.shape)
-        print(X)
-        
+
         self.estimator.fit(X, lengths)
         return list(self.estimator.monitor_.history)
 
-    def predict(self, feed_dict=None, *args, **kwargs):
+    def predict(self, X, lengths=lengths, *args, **kwargs):
         """ Make prediction with the data provided.
 
         Parameters
