@@ -148,8 +148,10 @@ class HMModel(BaseModel):
         """
         
         X, lengths = self._make_prediction_inputs(*args, targets=targets, feed_dict=feed_dict, **kwargs)
+        print(X.shape)
+        print(X)
         
-        self.estimator.fit(X['X'], lengths)
+        self.estimator.fit(X, lengths)
         return list(self.estimator.monitor_.history)
 
     def predict(self, feed_dict=None, *args, **kwargs):
