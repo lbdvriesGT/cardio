@@ -101,7 +101,7 @@ class HMModel(BaseModel):
         with open(path, "rb") as file:
             self.estimator = dill.load(file)
 
-    def train(self,X, lengths):
+    def train(self,X=None, lengths=None):
         """ Train the model using data provided.
 
         Parameters
@@ -124,7 +124,7 @@ class HMModel(BaseModel):
         self.estimator.fit(X=X, lengths=lengths)
         return list(self.estimator.monitor_.history)
 
-    def predict(self, X, lengths):
+    def predict(self, X=None, lengths=None):
         """ Make prediction with the data provided.
 
         Parameters
