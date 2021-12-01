@@ -824,6 +824,8 @@ class Pipeline:
         return args, kwargs
 
     def _save_output(self, batch, model, output, save_to, mode='w'):
+        if output == None:
+            raise "Output is None"
         if not isinstance(save_to, (tuple, list)):
             save_to = [save_to]
             if isinstance(output, (tuple, list)):
