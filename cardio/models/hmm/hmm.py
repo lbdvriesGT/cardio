@@ -122,7 +122,7 @@ class HMModel(BaseModel):
         
         
         
-        self.estimator.fit(_['X'], _['lengths'])
+        self.estimator.fit(X=_['X'], lengths=_['lengths'])
         return list(self.estimator.monitor_.history)
 
     def predict(self, *args, **kwargs):
@@ -148,7 +148,7 @@ class HMModel(BaseModel):
         For more details and other parameters look at the documentation for the estimator used.
         """
         _ = **kwargs
-        preds = self.estimator.predict(_['X'], _['lengths'])
+        preds = self.estimator.predict(X=_['X'],lengths=_['lengths'])
         lengths = kwargs.get('lengths')
         if lengths:
             output = np.array(np.split(preds, np.cumsum(lengths)[:-1]) + [None])[:-1]
