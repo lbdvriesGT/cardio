@@ -2,6 +2,7 @@
 
 import numpy as np
 import dill
+import warnings
 
 from ...dataset.dataset.models.base import BaseModel
 
@@ -96,8 +97,39 @@ class HMModel(BaseModel):
         """
         with open(path, "rb") as file:
             self.estimator = dill.load(file)
+            
+            
+    def _make_prediction_inputs(self, *args, targets=None, feed_dict=None, **kwargs):
+        """ Parse arguments to create valid inputs for the model.
+        Implements the logic of parsing the positional and keyword arguments to the model,
+        possibly wrapped into `feed_dict` dictionary, or even combination of the two.
+        Used under the hood of :meth:`~.TorchModel.predict` method.
+        Examples
+        --------
+        .. code-block:: python
+            model.predict(B('images'), targets=B('labels'))
+            model.predict(images=B('images'), targets=B('labels'))
+            model.predict(B('images'), targets=B('labels'), masks=B('masks'))
+        """
+        # Concatenate `kwargs` and `feed_dict`; if not empty, use keywords in `parse_input`
+        feed_dict = {**(feed_dict or {}), **kwargs}
+        if len(feed_dict) == 1:
+            _, value = feed_dict.popitem()
+            args = (*args, value)
+        if feed_dict:
+            if targets is not None and 'targets' in feed_dict.keys():
+                warnings.warn("`targets` already present in `feed_dict`, so those passed as keyword arg won't be used")
+            *inputs, targets = self.parse_inputs(*args, **feed_dict)
 
-    def train(self, X, lengths=None, *args, **kwargs):
+        # Positional arguments only
+        else:
+            inputs = self.parse_inputs(*args)
+            if targets is not None:
+                targets = self.parse_inputs(targets)[0]
+        inputs = inputs[0] if isinstance(inputs, (tuple, list)) and len(inputs) == 1 else inputs
+        return inputs, targets
+ 
+    def train(self, feed_dict=None, *args, **kwargs):
         """ Train the model using data provided.
 
         Parameters
@@ -114,10 +146,13 @@ class HMModel(BaseModel):
         -----
         For more details and other parameters look at the documentation for the estimator used.
         """
+        
+        X, lengths = self._make_prediction_inputs(*args, targets=targets, feed_dict=feed_dict, **kwargs)
+        
         self.estimator.fit(X, lengths)
         return list(self.estimator.monitor_.history)
 
-    def predict(self, X, lengths=None, *args, **kwargs):
+    def predict(self, feed_dict=None, *args, **kwargs):
         """ Make prediction with the data provided.
 
         Parameters
@@ -139,6 +174,7 @@ class HMModel(BaseModel):
         -----
         For more details and other parameters look at the documentation for the estimator used.
         """
+        X, lengths = self._make_prediction_inputs(*args, targets=targets, feed_dict=feed_dict, **kwargs)
         preds = self.estimator.predict(X, lengths)
         if lengths:
             output = np.array(np.split(preds, np.cumsum(lengths)[:-1]) + [None])[:-1]
