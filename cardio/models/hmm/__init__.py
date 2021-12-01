@@ -1,2 +1,2 @@
 """Contains HMM annotation model class."""
-from .hmm import *
+from .hmm import HMModel, prepare_hmm_input
