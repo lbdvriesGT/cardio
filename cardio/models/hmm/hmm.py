@@ -2,11 +2,11 @@
 
 import numpy as np
 import dill
-import warnings
 
 from ...dataset.dataset.models.base import BaseModel
 
-def prepare_hmm_inputX(batch, model, features, channel_ix):
+
+def prepare_hmm_input(batch, model, features, channel_ix):
     """Concatenate selected channel ``channel_ix`` of the batch attribute
     ``features``.
 
@@ -33,43 +33,10 @@ def prepare_hmm_inputX(batch, model, features, channel_ix):
             List of lengths of individual feature arrays along -1 axis.
     """
     _ = model
-    hmm_features = getattr(batch, "hmm_features")
+    hmm_features = getattr(batch, features)
     x = np.concatenate([features[channel_ix].T for features in hmm_features])
-    lengths = [hmm_features.shape[-1] for feature in hmm_features]
-    return x.reshape(-1, 1)
-
-def prepare_hmm_inputy(batch, model, features, channel_ix):
-    """Concatenate selected channel ``channel_ix`` of the batch attribute
-    ``features``.
-
-    Parameters
-    ----------
-    batch : EcgBatch
-        Batch to concatenate.
-    model : BaseModel
-        A model to get the resulting arguments.
-    features : str
-        Specifies batch attribute that contains features for ``HMModel``.
-    channel_ix : int
-        Index of channel, which data should be used in training and
-        predicting.
-
-    Returns
-    -------
-    kwargs : dict
-        Named argments for model's train or predict method. Has the
-        following structure:
-        "X" : 2-D ndarray
-            Features concatenated along -1 axis and transposed.
-        "lengths" : list
-            List of lengths of individual feature arrays along -1 axis.
-    """
-    _ = model
-    hmm_features = getattr(batch, "hmm_features")
-    x = np.concatenate([features[channel_ix].T for features in hmm_features])
-    lengths = [hmm_features.shape[-1] for feature in hmm_features]
-
-    return lengths
+    lengths = [features.shape[-1] for features in hmm_features]
+    return {"X": x, "lengths": lengths}
 
 
 class HMModel(BaseModel):
@@ -94,8 +61,8 @@ class HMModel(BaseModel):
         of the estimator as defined in ``init_params``.
         """
         _ = args, kwargs
-        self.estimator = self.config.get('estimator')
-        init_params = self.config.get('init_params')
+        self.estimator = self.get("estimator")
+        init_params = self.get("init_params")
         if init_params is not None:
             if "m" not in self.estimator.init_params:
                 self.estimator.means_ = init_params["means_"]
@@ -130,11 +97,8 @@ class HMModel(BaseModel):
         """
         with open(path, "rb") as file:
             self.estimator = dill.load(file)
-            
-            
-    
- 
-    def train(self, X, lengths, *args, **kwargs):
+
+    def train(self, X, lengths=None, *args, **kwargs):
         """ Train the model using data provided.
 
         Parameters
@@ -151,11 +115,10 @@ class HMModel(BaseModel):
         -----
         For more details and other parameters look at the documentation for the estimator used.
         """
-
         self.estimator.fit(X, lengths)
         return list(self.estimator.monitor_.history)
 
-    def predict(self, X, lengths, *args, **kwargs):
+    def predict(self, X, lengths=None, *args, **kwargs):
         """ Make prediction with the data provided.
 
         Parameters
@@ -177,7 +140,6 @@ class HMModel(BaseModel):
         -----
         For more details and other parameters look at the documentation for the estimator used.
         """
-        X, lengths = self._make_prediction_inputs(*args, targets=targets, feed_dict=feed_dict, **kwargs)
         preds = self.estimator.predict(X, lengths)
         if lengths:
             output = np.array(np.split(preds, np.cumsum(lengths)[:-1]) + [None])[:-1]
