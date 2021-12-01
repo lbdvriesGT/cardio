@@ -36,6 +36,7 @@ def prepare_hmm_input(batch, model, features, channel_ix):
     hmm_features = getattr(batch, features)
     x = np.concatenate([features[channel_ix].T for features in hmm_features])
     lengths = [features.shape[-1] for features in hmm_features]
+    
     return {"X": x, "lengths": lengths}
 
 
