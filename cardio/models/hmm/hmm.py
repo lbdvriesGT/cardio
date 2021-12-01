@@ -69,7 +69,7 @@ def prepare_hmm_inputy(batch, model, features, channel_ix):
     x = np.concatenate([features[channel_ix].T for features in hmm_features])
     lengths = [hmm_features.shape[2] for feature in hmm_features]
 
-    return "lengths": lengths}
+    return lengths
 
 
 class HMModel(BaseModel):
