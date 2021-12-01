@@ -1,4 +1,4 @@
 """Contains ECG models and custom functions."""
 
-from .hmm import *  # pylint: disable=wildcard-import
+from .hmm import HMModel, prepare_hmm_input  # pylint: disable=wildcard-import
 from . import metrics
