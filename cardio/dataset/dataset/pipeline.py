@@ -1202,7 +1202,7 @@ class Pipeline:
     def _exec_train_model(self, batch, action):
         model = self.get_model_by_name(action['model_name'], batch=batch)
         args, kwargs = self._make_model_args(batch, action)
-        output = model.train(kwargs['X'], kwargs['lengths'])
+        output = model.train(X=kwargs['X'], lengths=kwargs['lengths'])
         self._save_output(batch, model, output, action['save_to'])
 
     def _exec_predict_model(self, batch, action):
