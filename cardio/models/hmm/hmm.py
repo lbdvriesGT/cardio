@@ -33,9 +33,9 @@ def prepare_hmm_input(batch, model, features, channel_ix):
     """
     _ = model
     hmm_features = batch.get_variable("hmm_features")
-    x = np.concatenate([features[channel_ix,:,:].T for features in hmm_features])
+    x = np.concatenate([features[channel_ix].T for features in hmm_features])
     lengths = [hmm_features.shape[2] for feature in hmm_features]
-    return {"X": x, "lengths": lengths}
+    return {"X": x.reshape(-1, 1), "lengths": lengths}
 
 
 class HMModel(BaseModel):
