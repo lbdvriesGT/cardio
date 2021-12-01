@@ -854,13 +854,13 @@ class Pipeline:
     def _exec_train_model(self, batch, action):
         model = self.get_model_by_name(action['model_name'], batch=batch)
         args, kwargs = self._make_model_args(batch, action, model)
-        output = model.train(**kwargs)
+        output = model.train(*args, **kwargs)
         self._save_output(batch, model, output, action['save_to'], action['mode'])
 
     def _exec_predict_model(self, batch, action):
         model = self.get_model_by_name(action['model_name'], batch=batch)
         args, kwargs = self._make_model_args(batch, action, model)
-        predictions = model.predict(**kwargs)
+        predictions = model.predict(*args, **kwargs)
         self._save_output(batch, model, predictions, action['save_to'], action['mode'])
 
 
