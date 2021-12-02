@@ -101,53 +101,39 @@ class HMModel(BaseModel):
         with open(path, "rb") as file:
             self.estimator = dill.load(file)
 
-    def train(self, X,lengths, *args, **kwargs):
+    def train(self, X, *args, **kwargs):
         """ Train the model using data provided.
 
         Parameters
         ----------
-        x : array-like
-            A matrix of observations.
-            Should be of shape (n_samples, n_features).
-        lengths : array-like of integers optional
-            If present, should be of shape (n_sequences, ).
-            Lengths of the individual sequences in ``X``. The sum of
-            these should be ``n_samples``.
+        X : array
+            An array of observations to learn from. Also, it is expected
+            that kwargs contain key "lenghts", which define lengths of
+            sequences.
 
-        Notes
-        -----
         For more details and other parameters look at the documentation for the estimator used.
         """
-        
-        
-        
-        self.estimator.fit(X, lengths, *args, **kwargs)
+        lengths = kwargs.get("lengths", None)
+        self.estimator.fit(X, lengths)
         return list(self.estimator.monitor_.history)
 
-    def predict(self, X, lengths, *args, **kwargs):
-        """ Make prediction with the data provided.
+    def predict(self, X, *args, **kwargs):
+        """ Predict with the data provided
 
         Parameters
         ----------
-        X : array-like
-            A matrix of observations.
-            Should be of shape (n_samples, n_features).
-        lengths : array-like of integers optional
-            If present, should be of shape (n_sequences, ).
-            Lengths of the individual sequences in ``X``. The sum of
-            these should be ``n_samples``.
+        X : array
+            An array of observations to make predictions from.
+
+        For more details and other parameters look at the documentation for the estimator used.
 
         Returns
         -------
         output: array
-            Labels for each sample of X.
-
-        Notes
-        -----
-        For more details and other parameters look at the documentation for the estimator used.
+            Predicted value per observation.
         """
-        preds = self.estimator.predict(X, lengths, *args, **kwargs)
-        lengths = kwargs.get('lengths')
+        lengths = kwargs.get("lengths", None)
+        preds = self.estimator.predict(X, lengths)
         if lengths:
             output = np.array(np.split(preds, np.cumsum(lengths)[:-1]) + [None])[:-1]
         else:
