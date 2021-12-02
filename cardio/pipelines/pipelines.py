@@ -54,28 +54,19 @@ def hmm_preprocessing_pipeline(batch_size=20, features="hmm_features"):
       .update(V("hmm_features"), ds.B("hmm_features"))
       .run(batch_size=20, shuffle=False, drop_last=False, n_epochs=1, lazy=True, bar=True))
 
-def hmm_train_pipeline(hmm_preprocessed, batch_size=20, features="hmm_features", channel_ix=0,
-                       n_iter=25, random_state=42, model_name='HMM'):
+def hmm_train_pipeline(hmm_preprocessed, batch_size=20):
     """Train pipeline for Hidden Markov Model.
 
     This pipeline trains hmm model to isolate QRS, PQ and QT segments.
-    It works with dataset that generates batches of class ``EcgBatch``.
+    It works with dataset that generates bathes of class EcgBatch.
 
     Parameters
     ----------
     hmm_preprocessed : Pipeline
-        Pipeline with precomputed hmm features through ``hmm_preprocessing_pipeline``
+        Pipeline with precomputed hmm features through hmm_preprocessing_pipeline
     batch_size : int
         Number of samples in batch.
         Default value is 20.
-    features : str
-        Batch attribute to store calculated features.
-    channel_ix : int
-        Index of signal's channel, which should be used in training and predicting.
-    n_iter : int
-        Number of learning iterations for ``HMModel``.
-    random_state: int
-        Random state for ``HMModel``.
 
     Returns
     -------
@@ -83,7 +74,38 @@ def hmm_train_pipeline(hmm_preprocessed, batch_size=20, features="hmm_features",
         Output pipeline.
     """
 
-    def prepare_means_covars(hmm_features, clustering, states=(3, 5, 11, 14, 17, 19), num_states=19, num_features=3):
+    def prepare_batchx(batch, model):
+        """Prepare data for training
+        """
+        #from pprint import pprint
+        #pprint(vars(batch))"""        
+        #print(batch.hmm_features)
+        _ = model
+        lengths = [hmm_features.shape[2] for hmm_features in batch.hmm_features]
+        #print(lengths)
+
+        x = np.concatenate([hmm_features[0,:,:].T for hmm_features in batch.hmm_features])
+        #print(x)
+        feed_dict = {"X": x, "lengths": lengths}
+        return feed_dict['X']
+    
+    def prepare_batchy(batch, model):
+        """Prepare data for training
+        """
+        #from pprint import pprint
+        #pprint(vars(batch))"""        
+        #print(batch.hmm_features)
+        _ = model
+        lengths = [hmm_features.shape[2] for hmm_features in batch.hmm_features]
+        #print(lengths)
+
+        x = np.concatenate([hmm_features[0,:,:].T for hmm_features in batch.hmm_features])
+        #print(x)
+        feed_dict = {"X": x, "lengths": lengths}
+        return feed_dict['lengths']
+
+
+    def prepare_means_covars(hmm_features, clustering, states=[3, 5, 11, 14, 17, 19], num_states=19, num_features=3):#pylint: disable=dangerous-default-value
         """This function is specific to the task and the model configuration, thus contains hardcode.
         """
         means = np.zeros((num_states, num_features))
@@ -115,60 +137,37 @@ def hmm_train_pipeline(hmm_preprocessed, batch_size=20, features="hmm_features",
 
         return transition_matrix, start_probabilities
 
-    def expand_annotation(annsamp, anntype, length):
-        """Unravel annotation
-        """
-        begin = -1
-        end = -1
-        s = 'none'
-        states = {'N':0, 'st':1, 't':2, 'iso':3, 'p':4, 'pq':5}
-        annot_expand = -1 * np.ones(length)
 
-        for j, samp in enumerate(annsamp):
-            if anntype[j] == '(':
-                begin = samp
-                if (end > 0) & (s != 'none'):
-                    if s == 'N':
-                        annot_expand[end:begin] = states['st']
-                    elif s == 't':
-                        annot_expand[end:begin] = states['iso']
-                    elif s == 'p':
-                        annot_expand[end:begin] = states['pq']
-            elif anntype[j] == ')':
-                end = samp
-                if (begin > 0) & (s != 'none'):
-                    annot_expand[begin:end] = states[s]
-            else:
-                s = anntype[j]
 
-        return annot_expand
-
-    lengths = [features_iter.shape[2] for features_iter in hmm_preprocessed.get_variable(features)]
-    hmm_features = np.concatenate([features_iter[channel_ix, :, :].T for features_iter
-                                   in hmm_preprocessed.get_variable(features)])
-    anntype = hmm_preprocessed.get_variable("anntypes")
-    annsamp = hmm_preprocessed.get_variable("annsamps")
-
-    expanded = np.concatenate([expand_annotation(samp, types, length) for
-                               samp, types, length in zip(annsamp, anntype, lengths)])
-    means, covariances = prepare_means_covars(hmm_features, expanded, states=[3, 5, 11, 14, 17, 19], num_features=3)
+    lengths = [hmm_features.shape[2] for hmm_features in ppl_inits.get_variable("hmm_features")]
+    hmm_features = np.concatenate([hmm_features[0,:,:].T for hmm_features in ppl_inits.get_variable("hmm_features")])
+    anntype = ppl_inits.get_variable("anntypes")
+    annsamp = ppl_inits.get_variable("annsamps")
+    
+    expanded = np.concatenate([expand_annotation(samp, types, length) for samp, types, length in zip(annsamp, anntype, lengths)])
+    
+    means, covariances = prepare_means_covars(hmm_features, expanded, states = [3, 5, 11, 14, 17, 19], num_features = 3)    
     transition_matrix, start_probabilities = prepare_transmat_startprob()
 
     config_train = {
         'build': True,
-        'estimator': hmm.GaussianHMM(n_components=19, n_iter=n_iter, covariance_type="full", random_state=random_state,
+        'estimator': hmm.GaussianHMM(n_components=19, n_iter=25, covariance_type="full", random_state=42,
                                      init_params='', verbose=False),
         'init_params': {'means_': means, 'covars_': covariances, 'transmat_': transition_matrix,
                         'startprob_': start_probabilities}
     }
 
     return (ds.Pipeline()
-            .init_model(model_name, HMModel, "dynamic", config=config_train)
-            .load(fmt='wfdb', components=["signal", "annotation", "meta"], ann_ext='pu1')
-            .cwt(src="signal", dst=features, scales=[4, 8, 16], wavelet="mexh")
-            .standardize(axis=-1, src=features, dst=features)
-            .train_model(model_name, make_data=partial(prepare_hmm_input, features=features, channel_ix=channel_ix))
-            .run(batch_size=batch_size, shuffle=False, drop_last=False, n_epochs=1, lazy=True, bar=True))
+            .init_variable("hmm_features", list)
+            .init_model("HMM", HMModel, "dynamic", config=config_train)
+            .load(fmt='wfdb', components=["signal"], ann_ext='pu')
+          .cwt(src="signal", dst="hmm_features", scales=[4,8,16], wavelet="mexh")
+          .standardize(axis=-1, src="hmm_features", dst="hmm_features")
+            .train_model("HMM", 
+                         X=F(prepare_batchx)(B(), "HMM"),
+                         lengths=F(prepare_batchy)(B(), "HMM"))
+            .run(batch_size=batch_size, shuffle=False, drop_last=False, n_epochs=1, lazy=True))
+
 
 def hmm_predict_pipeline(model_path, batch_size=20, features="hmm_features",
                          channel_ix=0, annot="hmm_annotation", model_name='HMM'):
