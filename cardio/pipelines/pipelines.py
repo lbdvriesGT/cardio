@@ -73,6 +73,39 @@ def hmm_train_pipeline(hmm_preprocessed, batch_size=20):
     pipeline : Pipeline
         Output pipeline.
     """
+    def get_annsamples(batch):
+        return [ann["annsamp"] for ann in batch.annotation]
+
+    def get_anntypes(batch):
+        return [ann["anntype"] for ann in batch.annotation]
+
+    def expand_annotation(annsamp, anntype, length):
+        """Unravel annotation
+        """
+        begin = -1
+        end = -1
+        s = 'none'
+        states = {'N':0, 'st':1, 't':2, 'iso':3, 'p':4, 'pq':5}
+        annot_expand = -1 * np.ones(length)
+
+        for j, samp in enumerate(annsamp):
+            if anntype[j] == '(':
+                begin = samp
+                if (end > 0) & (s != 'none'):
+                    if s == 'N':
+                        annot_expand[end:begin] = states['st']
+                    elif s == 't':
+                        annot_expand[end:begin] = states['iso']
+                    elif s == 'p':
+                        annot_expand[end:begin] = states['pq']
+            elif anntype[j] == ')':
+                end = samp
+                if (begin > 0) & (s != 'none'):
+                    annot_expand[begin:end] = states[s]
+            else:
+                s = anntype[j]
+
+        return annot_expand
 
     def prepare_batchx(batch, model):
         """Prepare data for training
@@ -139,10 +172,10 @@ def hmm_train_pipeline(hmm_preprocessed, batch_size=20):
 
 
 
-    lengths = [hmm_features.shape[2] for hmm_features in ppl_inits.get_variable("hmm_features")]
-    hmm_features = np.concatenate([hmm_features[0,:,:].T for hmm_features in ppl_inits.get_variable("hmm_features")])
-    anntype = ppl_inits.get_variable("anntypes")
-    annsamp = ppl_inits.get_variable("annsamps")
+    lengths = [hmm_features.shape[2] for hmm_features in hmm_preprocessed.get_variable("hmm_features")]
+    hmm_features = np.concatenate([hmm_features[0,:,:].T for hmm_features in hmm_preprocessed.get_variable("hmm_features")])
+    anntype = hmm_preprocessed.get_variable("anntypes")
+    annsamp = hmm_preprocessed.get_variable("annsamps")
     
     expanded = np.concatenate([expand_annotation(samp, types, length) for samp, types, length in zip(annsamp, anntype, lengths)])
     
